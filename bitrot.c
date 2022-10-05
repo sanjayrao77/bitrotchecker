@@ -614,6 +614,16 @@ while (1) {
 			}
 			continue; // ignore files that are too new
 		}
+		file=filename_find2_filebyname(db->files.topnode,de->d_name);
+		if (!file && b->options.isnothingnew) { // want to skip before md5
+			if (isverbose) {
+				if (0>fputs("skipping new file: ",msgout)) GOTOERROR;
+				if (printpath(db,msgout)) GOTOERROR;
+				if (0>fputs(de->d_name,msgout)) GOTOERROR;
+				if (0>fputc('\n',msgout)) GOTOERROR;
+			}
+			continue;
+		}
 		{
 			int isnofile;
 			if (b->options.isprogress) {
@@ -633,7 +643,6 @@ while (1) {
 				continue;
 			}
 		}
-		file=filename_find2_filebyname(db->files.topnode,de->d_name);
 		if (file) {
 			file->flags|=ISFOUND_FLAG_BITROT;
 			if (memcmp(md5,file->md5,LEN_MD5_BITROT)) {
@@ -674,27 +683,18 @@ while (1) {
 				}
 			}
 		} else {
-			if (b->options.isnothingnew) {
-				if (isverbose) {
-					if (0>fputs("skipping new file: ",msgout)) GOTOERROR;
-					if (printpath(db,msgout)) GOTOERROR;
-					if (0>fputs(de->d_name,msgout)) GOTOERROR;
-					if (0>fputc('\n',msgout)) GOTOERROR;
-				}
-			} else {
-				if (!(file=ALLOC_blockmem(&b->blockmem,struct file_bitrot))) GOTOERROR;
-				clear_file_bitrot(file);
-				if (!(file->name=strdup_blockmem(&b->blockmem,de->d_name))) GOTOERROR;
-				file->flags=ISFOUND_FLAG_BITROT;
-				memcpy(file->md5,md5,LEN_MD5_BITROT);
-				(void)addnode2_filebyname(&db->files.topnode,file);
-				b->stats.changecount+=1;
-				if (isverbose) {
-					if (0>fputs("new file: ",msgout)) GOTOERROR;
-					if (printpath(db,msgout)) GOTOERROR;
-					if (0>fputs(de->d_name,msgout)) GOTOERROR;
-					if (0>fputc('\n',msgout)) GOTOERROR;
-				}
+			if (!(file=ALLOC_blockmem(&b->blockmem,struct file_bitrot))) GOTOERROR;
+			clear_file_bitrot(file);
+			if (!(file->name=strdup_blockmem(&b->blockmem,de->d_name))) GOTOERROR;
+			file->flags=ISFOUND_FLAG_BITROT;
+			memcpy(file->md5,md5,LEN_MD5_BITROT);
+			(void)addnode2_filebyname(&db->files.topnode,file);
+			b->stats.changecount+=1;
+			if (isverbose) {
+				if (0>fputs("new file: ",msgout)) GOTOERROR;
+				if (printpath(db,msgout)) GOTOERROR;
+				if (0>fputs(de->d_name,msgout)) GOTOERROR;
+				if (0>fputc('\n',msgout)) GOTOERROR;
 			}
 		}
 	// if S_ISREG
