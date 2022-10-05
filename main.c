@@ -1,5 +1,5 @@
 /*
- * main.h
+ * main.c
  * Copyright (C) 2022 Sanjay Rao
  *
  * This program is free software; you can redistribute it and/or modify
@@ -234,6 +234,7 @@ if (istar) {
 	bitrot.options.msgout=stdout;
 	if (scandir_bitrot(&bitrot,rootdir)) GOTOERROR;
 }
+(void)unprintprogress_bitrot(&bitrot);
 
 // printtree_bitrot(&bitrot,stderr);
 
