@@ -29,6 +29,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <inttypes.h>
 #ifdef OPENSSL
 #include <openssl/md5.h>
 #elif GNUTLS
@@ -922,7 +923,7 @@ if (isregular_scantar(tb) && !isignored_scantar(b,tb)) {
 		GOTOERROR;
 	}
 	if (size>MAX_FILENAME_TARVARS_BITROT) {
-		fprintf(stderr,"%s:%d Tar type L size is too large: %llu\n",__FILE__,__LINE__,size);
+		fprintf(stderr,"%s:%d Tar type L size is too large: %"PRIu64"\n",__FILE__,__LINE__,size);
 		GOTOERROR;
 	}
 	tb->state=SLURP_STATE_TARVARS_BITROT;
