@@ -32,15 +32,18 @@ file.
 
 ## Building
 
-Currently, only linux is supported. Either GNU-TLS or OpenSSL is required, for header
-and library files. Debian calls these libgnutls28-dev and libssl-dev. E.g., you
-can run "apt-get install libgnutls28-dev" to install the required dependencies on Debian.
-
-To compile on linux, first install either libgnutls28-dev or libssl-dev packages.
-Then run "make" for gnutls or "make -f Makefile.openssl" for openssl.
+Currently, only linux is supported. No extra libraries are required. You should
+be able to download the files and run "make".
 
 For non-linux systems, you can remove -DUSEMMAP to use read() instead. It should be
 easy to port to other unix systems.
+
+The standard Makefile compiles a native implementation of md5. It's probably not
+the fastest. You can use Makefile.gnutls and Makefile.openssl to use GNU-TLS and
+OpenSSL for their md5 routines. You'll need header and library files for that
+to be successful. Debian calls these libgnutls28-dev and libssl-dev. E.g., you
+can run "apt-get install libgnutls28-dev" to install the required dependencies 
+for GNU-TLS on Debian.
 
 ## Quick start
 

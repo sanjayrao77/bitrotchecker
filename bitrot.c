@@ -31,9 +31,10 @@
 #include <errno.h>
 #ifdef OPENSSL
 #include <openssl/md5.h>
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 #include <gnutls/openssl.h>
+#else
+#include "common/md5.h"
 #endif
 #define DEBUG
 #include "common/conventions.h"
@@ -393,9 +394,10 @@ if (0>fd) {
 
 #ifdef OPENSSL
 if (1!=MD5_Init(&ctx)) GOTOERROR; // probably can't happen
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 (void)MD5_Init(&ctx);
+#else
+(void)clear_context_md5(&ctx);
 #endif
 
 if (statbuf->st_size) {
@@ -409,9 +411,10 @@ if (statbuf->st_size) {
 		if (left>READCHUNK_BITROT) {
 #ifdef OPENSSL
 			if (1!=MD5_Update(&ctx,ptr,READCHUNK_BITROT)) GOTOERROR;
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 			(void)MD5_Update(&ctx,ptr,READCHUNK_BITROT);
+#else
+			(void)addbytes_context_md5(&ctx,ptr,READCHUNK_BITROT);
 #endif
 			ptr+=READCHUNK_BITROT;
 			left-=READCHUNK_BITROT;
@@ -420,9 +423,10 @@ if (statbuf->st_size) {
 			k=left;
 #ifdef OPENSSL
 			if (1!=MD5_Update(&ctx,ptr,k)) GOTOERROR;
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 			(void)MD5_Update(&ctx,ptr,k);
+#else
+			(void)addbytes_context_md5(&ctx,ptr,k);
 #endif
 			break;
 		}
@@ -432,9 +436,10 @@ if (statbuf->st_size) {
 
 #ifdef OPENSSL
 if (1!=MD5_Final(dest,&ctx)) GOTOERROR;
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 (void)MD5_Final(dest,&ctx);
+#else
+(void)finish_context_md5(dest,&ctx);
 #endif
 
 *isnofile_out=0;
@@ -470,9 +475,10 @@ if (0>fd) {
 
 #ifdef OPENSSL
 if (1!=MD5_Init(&ctx)) GOTOERROR; // probably can't happen
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 (void)MD5_Init(&ctx);
+#else
+(void)clear_context_md5(&ctx);
 #endif
 
 ptr=b->iobuffer.ptr;
@@ -487,18 +493,20 @@ while (1) {
 	}
 #ifdef OPENSSL
 	if (1!=MD5_Update(&ctx,ptr,k)) GOTOERROR;
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 	(void)MD5_Update(&ctx,ptr,k);
+#else
+	(void)addbytes_context_md5(&ctx,ptr,k);
 #endif
 	if (readusleep) usleep(readusleep);
 }
 
 #ifdef OPENSSL
 if (1!=MD5_Final(dest,&ctx)) GOTOERROR;
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 (void)MD5_Final(dest,&ctx);
+#else
+(void)finish_context_md5(dest,&ctx);
 #endif
 
 *isnofile_out=0;
@@ -869,9 +877,10 @@ if (isregular_scantar(tb) && !isignored_scantar(b,tb)) {
 		tb->checksum.databytesleft=size;
 #ifdef OPENSSL
 		if (1!=MD5_Init(&tb->checksum.ctx)) GOTOERROR;
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 		(void)MD5_Init(&tb->checksum.ctx);
+#else
+		(void)clear_context_md5(&tb->checksum.ctx);
 #endif
 		if (b->options.isprogress) {
 			(void)printprogress((char *)tb->header.fields.f_name); // limits to 60
@@ -899,15 +908,17 @@ if (dbl) {
 	if (dbl<=len) {
 #ifdef OPENSSL
 		if (1!=MD5_Update(&tb->checksum.ctx,bytes,dbl)) GOTOERROR;
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 		(void)MD5_Update(&tb->checksum.ctx,bytes,dbl);
+#else
+		(void)addbytes_context_md5(&tb->checksum.ctx,bytes,dbl);
 #endif
 #ifdef OPENSSL
 		if (1!=MD5_Final(tb->checksum.md5,&tb->checksum.ctx)) GOTOERROR;
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 		(void)MD5_Final(tb->checksum.md5,&tb->checksum.ctx);
+#else
+		(void)finish_context_md5(tb->checksum.md5,&tb->checksum.ctx);
 #endif
 		tb->checksum.databytesleft=0;
 		tb->checksum.inputbytesleft-=dbl;
@@ -918,9 +929,10 @@ if (dbl) {
 	} else {
 #ifdef OPENSSL
 		if (1!=MD5_Update(&tb->checksum.ctx,bytes,len)) GOTOERROR;
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 		(void)MD5_Update(&tb->checksum.ctx,bytes,len);
+#else
+		(void)addbytes_context_md5(&tb->checksum.ctx,bytes,len);
 #endif
 		tb->checksum.databytesleft=dbl-len;
 		tb->checksum.inputbytesleft-=len;

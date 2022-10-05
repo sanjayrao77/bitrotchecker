@@ -31,9 +31,10 @@
 #include <errno.h>
 #ifdef OPENSSL
 #include <openssl/md5.h>
-#endif
-#ifdef GNUTLS
+#elif GNUTLS
 #include <gnutls/openssl.h>
+#else
+#include "common/md5.h"
 #endif
 #define DEBUG
 #include "common/conventions.h"
