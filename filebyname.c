@@ -1,5 +1,5 @@
 /*
- * filebyname.h
+ * filebyname.c
  * Copyright (C) 2022 Sanjay Rao
  *
  * This program is free software; you can redistribute it and/or modify
