@@ -85,6 +85,7 @@ fprintf(fout,"To verify old files, with md5sum: \"$ cd /home/myhome ; md5sum -c 
 
 int main(int argc, char **argv) {
 struct bitrot bitrot;
+struct tarvars_bitrot tarvars;
 char *sumfile=NULL;
 char *rootdir=NULL;
 unsigned char *tarbuffer=NULL;
@@ -99,7 +100,9 @@ int istar=0,istarstdout=0;
 --nothingnew : don't add new files from scan
 */
 
+
 clear_bitrot(&bitrot);
+clear_tarvars_bitrot(&tarvars);
 
 int i;
 for (i=1;i<argc;i++) {
@@ -201,10 +204,7 @@ if (init_bitrot(&bitrot,istar)) GOTOERROR;
 #endif
 }
 if (istar) {
-	struct tarvars_bitrot tarvars;
-
-	clear_tarvars_bitrot(&tarvars);
-	voidinit_tarvars_bitrot(&tarvars);
+	if (init_tarvars_bitrot(&tarvars)) GOTOERROR;
 	bitrot.options.msgout=stderr;
 
 	if (!(tarbuffer=malloc(READCHUNK_BITROT))) GOTOERROR;
@@ -245,9 +245,11 @@ if (!bitrot.options.isdryrun) {
 
 iffree(tarbuffer);
 deinit_bitrot(&bitrot);
+deinit_tarvars_bitrot(&tarvars);
 return 0;
 error:
 	iffree(tarbuffer);
 	deinit_bitrot(&bitrot);
+	deinit_tarvars_bitrot(&tarvars);
 	return -1;
 }

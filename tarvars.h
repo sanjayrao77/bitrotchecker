@@ -22,14 +22,19 @@
 // collecting header
 #define HEADER_STATE_TARVARS_BITROT	1
 #define CONSIDER_STATE_TARVARS_BITROT	2
-#define CHECKSUM_STATE_TARVARS_BITROT	3
-#define ENDFILE_STATE_TARVARS_BITROT	4
-#define SKIPPING_STATE_TARVARS_BITROT	5
+#define SLURP_STATE_TARVARS_BITROT		3
+#define ENDSLURP_STATE_TARVARS_BITROT	4
+#define CHECKSUM_STATE_TARVARS_BITROT	5
+#define ENDFILE_STATE_TARVARS_BITROT	6
+#define SKIPPING_STATE_TARVARS_BITROT	7
 // 2 blank blocks at the end
-#define ENDBLOCKS_STATE_TARVARS_BITROT	6
-#define FINISHED_STATE_TARVARS_BITROT	7
+#define ENDBLOCKS_STATE_TARVARS_BITROT	8
+#define FINISHED_STATE_TARVARS_BITROT	9
+
+#define MAX_FILENAME_TARVARS_BITROT	1023
 struct tarvars_bitrot {
 	int state;
+	char *filename;
 	struct {
 		struct {
 			unsigned char *f_name;
@@ -54,10 +59,20 @@ struct tarvars_bitrot {
 			uint64_t size;
 			uint64_t mtime;
 			unsigned int prefixlen;
+#define NONE_FILETYPE_TARVARS_BITROT	0
+#define REGULAR_FILETYPE_TARVARS_BITROT	1
+#define LONGLINK_FILETYPE_TARVARS_BITROT	2
+#define LONGFILE_FILETYPE_TARVARS_BITROT	3
+			int filetype; 
 		} parsed;
 		unsigned int bytesleft;
 		unsigned char bytes[512];
 	} header;
+	struct {
+		uint64_t inputbytesleft; // aligned to blocksize
+		uint64_t databytesleft;
+		unsigned char *cursor; // data is malloc'd at 1024 bytes
+	} slurp;
 	struct {
 		unsigned char md5[LEN_MD5_BITROT];
 		uint64_t inputbytesleft; // aligned to blocksize
@@ -70,5 +85,6 @@ struct tarvars_bitrot {
 };
 H_CLEARFUNC(tarvars_bitrot);
 
-void voidinit_tarvars_bitrot(struct tarvars_bitrot *tb);
+int init_tarvars_bitrot(struct tarvars_bitrot *tb);
+void deinit_tarvars_bitrot(struct tarvars_bitrot *tb);
 int scantar_bitrot(struct bitrot *b, struct tarvars_bitrot *tb, unsigned char *bytes, unsigned int len);

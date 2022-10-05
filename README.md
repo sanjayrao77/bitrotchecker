@@ -87,8 +87,8 @@ If you want to compare existing files to a saved checksumfile, you'll want to
 make sure the starting points are the same so the files line up. You can use
 "--dry-run --verbose" to check the alignment.
 
-*Warning*: if you run bitrotchecker with an existing checksumfile but a
-different starting point, it will *remove* your old md5 values since the old
+**Warning**: if you run bitrotchecker with an existing checksumfile but a
+different starting point, it will **remove** your old md5 values since the old
 files will appear to no longer exist. You can use "--dry-run --verbose" to
 check if a new command matches an old one.
 
@@ -199,9 +199,11 @@ If you want to only scan files with existing checksums, using "--nothingnew" ins
 can be more efficient as "--dry-run" would still scan new files.
 
 ### --follow
-This follows symlinks. By default, symlinks are ignored (unless it is the directory on the command line).
+This follows symlinks when scanning the directory. By default, symlinks are ignored (unless it is the directory on the command line).
 
 If you're going to scan an entire filesystem anyway, symlinks would add redundant reading.
+
+Note that this is _not_ supported when reading tar files. Symlinks in tar files will be ignored.
 
 ### --nothingnew
 This instructs the scanner to ignore files that aren't already present in the checksumfile.
@@ -251,8 +253,8 @@ happened after the last scan. This is unfortunate but can be mitigated with the
 
 It's better to have the possibility of false positives than false negatives.
 
-*Warning:* If any files have been newly corrupted right before running this command, their old
-md5 values will be lost, since --savechanges will write the new value over it. To protect from
+**Warning:** If any files have been newly corrupted right before running this command, their old
+md5 values will be **lost**, since --savechanges will write the new value over it. To protect from
 that, you can save a backup of the checksumfile before running with this option.
 
 ### --slow
@@ -302,6 +304,10 @@ Example:
 tar -cf - . | ./bitrotchecker --tar --tar-stdout --progress /tmp/md5s.txt | gzip > /mnt/mybackup.tgz
 ```
 
+Some versions of tar are not supported. It should work with modern GNU Tar
+(with ././@LongLink) and POSIX 1003.1-1988 (aka ustar) formats. It should be
+fairly easy to add support for other formats.
+
 Note that bitrotchecker reads the uncompressed tar data but it is compressed
 afterward.
 
@@ -314,12 +320,11 @@ This will relay tar data to stdout when --tar is active.
 Without this option, tar data will be consumed from stdin and not saved. With this option,
 tar data will be relayed from stdin to stdout.
 
-If you use this option *be* *sure* to redirect stdout! You'll spam your console with
+If you use this option **be** **sure** to redirect stdout! You'll spam your console with
 tar data if you don't redirect stdout. E.g., the command
 "tar -cf - . | bitrotchecker --tar --tar-stdout /tmp/md5s.txt" will flood your console with tar data.
-
 
 ### --verbose
 This will print a lot more information about its operation.
 
-There's currently no point in combining "--verbose" with "--progress".
+If you are watching the output, you might also want "--progress".

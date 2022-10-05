@@ -180,7 +180,8 @@ error:
 	return -1;
 }
 
-#define MAXLINELEN	1024
+// it's hard to get filenames this long but with utf16 and ././@LongLink, it gets big
+#define MAXLINELEN	2048
 int loadfile_bitrot(int *isnotfound_out, struct bitrot *bitrot, char *sumfile) {
 FILE *ff=NULL;
 char *oneline=NULL;
@@ -727,7 +728,7 @@ error:
 
 CLEARFUNC(tarvars_bitrot);
 
-void voidinit_tarvars_bitrot(struct tarvars_bitrot *tb) {
+int init_tarvars_bitrot(struct tarvars_bitrot *tb) {
 unsigned char *bytes;
 bytes=tb->header.bytes;
 tb->header.fields.f_name=bytes+0;
@@ -749,6 +750,15 @@ tb->header.fields.f_prefix=bytes+345;
 
 tb->state=HEADER_STATE_TARVARS_BITROT;
 tb->header.bytesleft=512;
+
+if (!(tb->filename=malloc(MAX_FILENAME_TARVARS_BITROT+1))) GOTOERROR;
+return 0;
+error:
+	return -1;
+}
+
+void deinit_tarvars_bitrot(struct tarvars_bitrot *tb) {
+iffree(tb->filename);
 }
 
 static uint64_t octal12tou64(unsigned char *str) {
@@ -785,11 +795,20 @@ while (1) {
 }
 
 static int parsefields_tarvars(struct tarvars_bitrot *tb) {
+unsigned char gnumagic[]={'u','s','t','a','r',' ',' ',0};
+unsigned char posix1988[]={'u','s','t','a','r',0,'0','0'};
 tb->header.parsed.namelen=strnlen((char *)tb->header.fields.f_name,100);
 tb->header.parsed.size=octal12tou64(tb->header.fields.f_size);
 tb->header.parsed.mtime=octal12tou64(tb->header.fields.f_mtime);
-if (memcmp(tb->header.fields.f_magic,"ustar  ",8)) {
-	fprintf(stderr,"%s:%d file has unsupported magic value/format\n",__FILE__,__LINE__);
+if (memcmp(tb->header.fields.f_magic,gnumagic,8)) {
+} else if (memcmp(tb->header.fields.f_magic,posix1988,8)) {
+} else {
+	int i;
+	fprintf(stderr,"%s:%d file has unsupported magic value/format ",__FILE__,__LINE__);
+	for (i=0;i<8;i++) {
+		fprintf(stderr,"%02x",tb->header.fields.f_magic[i]);
+	}
+	fprintf(stderr,"\n");
 	GOTOERROR;
 }
 tb->header.parsed.prefixlen=strnlen((char *)tb->header.fields.f_name,155);
@@ -842,6 +861,10 @@ if (*tb->header.fields.f_typeflag=='7') return 1; // contiguous file
 if (*tb->header.fields.f_typeflag==0) return 1; // supported alternative
 return 0;
 }
+static inline int islonglink_scantar(struct tarvars_bitrot *tb) {
+if (*tb->header.fields.f_typeflag=='L') return 1; // GNU LongLink
+return 0;
+}
 static inline int isignored_scantar(struct bitrot *b, struct tarvars_bitrot *tb) {
 if (tb->header.parsed.mtime>b->options.ceiling_mtime) return 1;
 return 0;
@@ -864,6 +887,8 @@ fputs("\n",stderr);
 
 size=tb->header.parsed.size;
 if (isregular_scantar(tb) && !isignored_scantar(b,tb)) {
+	if (tb->header.parsed.filetype==LONGLINK_FILETYPE_TARVARS_BITROT) tb->header.parsed.filetype=LONGFILE_FILETYPE_TARVARS_BITROT;
+	else tb->header.parsed.filetype=REGULAR_FILETYPE_TARVARS_BITROT;
 	if (!size) {
 #if LEN_MD5_BITROT != 16
 #error
@@ -886,7 +911,27 @@ if (isregular_scantar(tb) && !isignored_scantar(b,tb)) {
 			(void)printprogress((char *)tb->header.fields.f_name); // limits to 60
 		}
 	}
+} else if (islonglink_scantar(tb)) {
+	tb->header.parsed.filetype=LONGLINK_FILETYPE_TARVARS_BITROT;
+	if (strcmp((char *)tb->header.fields.f_name,"././@LongLink")) {
+		fprintf(stderr,"%s:%d Tar type L without recognized ././@LongLink\n",__FILE__,__LINE__);
+		GOTOERROR;
+	}
+	if (!size) {
+		fprintf(stderr,"%s:%d Tar type L without size\n",__FILE__,__LINE__);
+		GOTOERROR;
+	}
+	if (size>MAX_FILENAME_TARVARS_BITROT) {
+		fprintf(stderr,"%s:%d Tar type L size is too large: %llu\n",__FILE__,__LINE__,size);
+		GOTOERROR;
+	}
+	tb->state=SLURP_STATE_TARVARS_BITROT;
+	tb->slurp.inputbytesleft=((size-1)|511)+1;
+	tb->slurp.databytesleft=size;
+	tb->slurp.cursor=(unsigned char *)tb->filename;
+	tb->filename[size]='\0';
 } else {
+	tb->header.parsed.filetype=NONE_FILETYPE_TARVARS_BITROT; // need to clear a previous LongLink record
 	if (!size) {
 		tb->state=HEADER_STATE_TARVARS_BITROT;
 		tb->header.bytesleft=512;
@@ -897,6 +942,50 @@ if (isregular_scantar(tb) && !isignored_scantar(b,tb)) {
 }
 
 return 0;
+error:
+	return -1;
+}
+
+static int slurp_scantar(unsigned int *consumed_out,
+		struct bitrot *b, struct tarvars_bitrot *tb, unsigned char *bytes, unsigned int len) {
+unsigned int consumed;
+uint64_t dbl;
+dbl=tb->slurp.databytesleft;
+if (dbl) {
+	if (dbl<=len) {
+		tb->slurp.databytesleft=0;
+		tb->slurp.inputbytesleft-=dbl;
+		memcpy(tb->slurp.cursor,bytes,dbl);
+//		tb->slurp.cursor+=dbl;
+		if (!tb->slurp.inputbytesleft) {
+			tb->state=ENDSLURP_STATE_TARVARS_BITROT;
+		}
+		consumed=dbl;
+	} else {
+		tb->slurp.databytesleft=dbl-len;
+		tb->slurp.inputbytesleft-=len;
+		memcpy(tb->slurp.cursor,bytes,len);
+		tb->slurp.cursor+=len;
+		consumed=len;
+	}
+} else {
+	uint64_t ibl;
+	ibl=tb->slurp.inputbytesleft;
+	if (ibl<=len) {
+		tb->state=ENDSLURP_STATE_TARVARS_BITROT;
+		consumed=ibl;
+	} else {
+		tb->slurp.inputbytesleft-=len;
+		consumed=len;
+	}
+}
+*consumed_out=consumed;
+return 0;
+}
+
+static void endslurp_scantar(struct bitrot *b, struct tarvars_bitrot *tb, unsigned char *bytes, unsigned int len) {
+tb->state=HEADER_STATE_TARVARS_BITROT;
+tb->header.bytesleft=512;
 }
 
 static int checksum_scantar(unsigned int *consumed_out,
@@ -954,19 +1043,24 @@ return 0;
 }
 
 static inline void getfullpath_tarvars(char *dest, struct tarvars_bitrot *tb) {
-// dest should be 256 chars
+// dest should be 257 chars
 unsigned int namelen=100,prefixlen=155;
 unsigned char *name,*prefix;
 name=tb->header.fields.f_name;
 prefix=tb->header.fields.f_prefix;
-while (1) {
-	if (!*prefix) break;
-	*dest=*prefix;
+if (*prefix) {
+	while (1) {
+		*dest=*prefix;
+		dest++;
+		prefixlen--;
+		if (!prefixlen) break;
+		prefix++;
+		if (!*prefix) break;
+	}
+	*dest='/';
 	dest++;
-	prefixlen--;
-	if (!prefixlen) break;
-	prefix++;
 }
+
 while (1) {
 	if (!*name) break;
 	*dest=*name;
@@ -979,22 +1073,29 @@ while (1) {
 }
 
 static int endfile_scantar(struct bitrot *b, struct tarvars_bitrot *tb, unsigned char *bytes, unsigned int len) {
-char fullpath[256];
+char *fullpath;
 struct file_bitrot *file;
 struct dir_bitrot *dir;
 char *filename;
 FILE *msgout;
 
 msgout=b->options.msgout;
+fullpath=tb->filename;
+
+tb->state=HEADER_STATE_TARVARS_BITROT;
+tb->header.bytesleft=512;
+
+if (tb->header.parsed.filetype==REGULAR_FILETYPE_TARVARS_BITROT) {
+#if MAX_FILENAME_TARVARS_BITROT	< 256
+#error
+#endif
+		(void)getfullpath_tarvars(fullpath,tb);
+}
+// nothing to do for LONGFILE_FILETYPE_TARVARS_BITROT, name is already in fullpath
 
 if (b->options.isprogress) {
 	(void)unprintprogress((char *)tb->header.fields.f_name); // limits to 60
 }
-
-(void)getfullpath_tarvars(fullpath,tb);
-
-tb->state=HEADER_STATE_TARVARS_BITROT;
-tb->header.bytesleft=512;
 
 #if 0
 fprintf(stderr,"%s:%d",__FILE__,__LINE__);
@@ -1124,16 +1225,30 @@ int scantar_bitrot(struct bitrot *b, struct tarvars_bitrot *tb, unsigned char *b
 while (len) {
 	unsigned int consumed;
 	switch (tb->state) {
-		case HEADER_STATE_TARVARS_BITROT: if (header_scantar(&consumed,b,tb,bytes,len)) GOTOERROR; break;
+		case HEADER_STATE_TARVARS_BITROT:
+			if (header_scantar(&consumed,b,tb,bytes,len)) GOTOERROR;
+			break;
 		case CONSIDER_STATE_TARVARS_BITROT:
 			if (consider_scantar(b,tb,bytes,len)) GOTOERROR;
 			continue;
-		case CHECKSUM_STATE_TARVARS_BITROT: if (checksum_scantar(&consumed,b,tb,bytes,len)) GOTOERROR; break;
+		case SLURP_STATE_TARVARS_BITROT:
+			(void)slurp_scantar(&consumed,b,tb,bytes,len);
+			break;
+		case ENDSLURP_STATE_TARVARS_BITROT:
+			(void)endslurp_scantar(b,tb,bytes,len);
+			continue;
+		case CHECKSUM_STATE_TARVARS_BITROT:
+			if (checksum_scantar(&consumed,b,tb,bytes,len)) GOTOERROR;
+			break;
 		case ENDFILE_STATE_TARVARS_BITROT:
 			if (endfile_scantar(b,tb,bytes,len)) GOTOERROR;
 			continue;
-		case SKIPPING_STATE_TARVARS_BITROT: if (skipping_scantar(&consumed,b,tb,bytes,len)) GOTOERROR; break;
-		case ENDBLOCKS_STATE_TARVARS_BITROT: if (endblocks_scantar(&consumed,b,tb,bytes,len)) GOTOERROR; break;
+		case SKIPPING_STATE_TARVARS_BITROT:
+			if (skipping_scantar(&consumed,b,tb,bytes,len)) GOTOERROR;
+			break;
+		case ENDBLOCKS_STATE_TARVARS_BITROT:
+			if (endblocks_scantar(&consumed,b,tb,bytes,len)) GOTOERROR;
+			break;
 		case FINISHED_STATE_TARVARS_BITROT: return 0; // trailing bytes
 		default: GOTOERROR;
 	}
