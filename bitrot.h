@@ -71,7 +71,15 @@ struct bitrot {
 #endif
 	struct {
 		unsigned int changecount;
+		uint64_t bytesprocessed;
 	} stats;
+	struct {
+		time_t nextupdate;
+		int isprinted;
+		int linelength;
+#define MAX_LINE_PROGRESS_BITROT	127
+		char line[MAX_LINE_PROGRESS_BITROT+1];
+	} progress;
 	struct {
 		FILE *msgout;
 		uint64_t ceiling_mtime; // don't collect files newer than this
@@ -91,6 +99,7 @@ H_CLEARFUNC(bitrot);
 
 int init_bitrot(struct bitrot *bitrot, int isnoio);
 void deinit_bitrot(struct bitrot *bitrot);
+void unprintprogress_bitrot(struct bitrot *b);
 int loadfile_bitrot(int *isnotfound_out, struct bitrot *bitrot, char *sumfile);
 int writefile_bitrot(struct bitrot *b, char *filename);
 int printtree_bitrot(struct bitrot *b, FILE *fout);

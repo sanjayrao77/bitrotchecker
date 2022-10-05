@@ -1,5 +1,5 @@
 /*
- * bitrot.h
+ * bitrot.c
  * Copyright (C) 2022 Sanjay Rao
  *
  * This program is free software; you can redistribute it and/or modify
@@ -18,6 +18,7 @@
  */
 #define _FILE_OFFSET_BITS 64
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -355,20 +356,69 @@ dir=&b->topdir;
 return 0;
 }
 
-static void printprogress(char *name) {
-// scantar needs x<=100 in strnlen(name,x)
+static void unprintprogress(struct bitrot *b) {
+char *line;
 int n;
-n=strnlen(name,60);
-(ignore)fputs("md5: ",stderr);
-(ignore)fwrite(name,n,1,stderr);
+
+if (!b->progress.isprinted) return;
+b->progress.isprinted=0;
+
+n=b->progress.linelength;
+line=b->progress.line;
+
+memset(line,' ',n);
+line[n]='\r';
+
+(ignore)fwrite(line,n+1,1,stderr);
 }
-static void unprintprogress(char *name) {
-int n;
-n=strnlen(name,60);
-n+=5;
-(ignore)fputc('\r',stderr);
-for (;n>=0;n--) (ignore)fputc(' ',stderr);
-(ignore)fputc('\r',stderr);
+static void printprogress(struct bitrot *b, int ismd5, char *name) {
+// scantar used to need x<=100 in strnlen(name,x)
+char *line;
+unsigned int n,m,columns;
+time_t t;
+
+t=time(NULL);
+if (b->progress.isprinted) {
+	if (t<b->progress.nextupdate) return;
+	(void)unprintprogress(b); // this could exceed columns if we had a resize but we have races there anyway
+}
+b->progress.isprinted=1;
+b->progress.nextupdate=t+1;
+
+line=b->progress.line;
+
+n=snprintf(line,MAX_LINE_PROGRESS_BITROT+1,"bitrot: %"PRIu64"MB %s",b->stats.bytesprocessed/(1024*1024),ismd5?"+ ":"- ");
+if (n>=MAX_LINE_PROGRESS_BITROT) return;
+
+#if 0
+unsigned int space;
+m=strnlen(name,100); // need 100 limit for tar
+space=MAX_LINE_PROGRESS_BITROT-n;
+if (m>space) m=space;
+#endif
+m=strnlen(name,MAX_LINE_PROGRESS_BITROT-n); // no limit needed now
+
+memcpy(line+n,name,m);
+n+=m;
+
+{
+	struct winsize ws;
+	if (!ioctl(STDERR_FILENO,TIOCGWINSZ,&ws)) {
+		columns=ws.ws_col;
+		if (columns>2) columns-=2;
+	} else {
+		columns=78;
+	}
+}
+
+n=_BADMIN(n,columns);
+b->progress.linelength=n;
+line[n]='\r'; // we have +1 allocated
+
+(ignore)fwrite(line,n+1,1,stderr);
+}
+void unprintprogress_bitrot(struct bitrot *b) {
+unprintprogress(b);
 }
 
 #ifdef USEMMAP
@@ -525,6 +575,7 @@ static int scandirB(struct bitrot *b, struct dir_bitrot *db, DIR *parentdir, cha
 DIR *dir=NULL;
 struct stat statbuf;
 int isverbose;
+int isnothingnew;
 int fstatatflags;
 FILE *msgout=b->options.msgout;
 
@@ -533,6 +584,7 @@ fprintf(stderr,"Entering directory %s\n",dirname);
 #endif
 
 isverbose=b->options.isverbose;
+isnothingnew=b->options.isnothingnew;
 
 if (!parentdir) { // topdir
 	if (!(dir=opendir(dirname))) GOTOERROR;
@@ -553,6 +605,7 @@ if (!parentdir) { // topdir
 		if (b->rootdir.xdev!=statbuf.st_dev) { // maybe a --bind mount
 			(ignore)close(fd);
 			if (isverbose) {
+				(void)unprintprogress(b);
 				if (0>fputs("skipping xdev dir: ",msgout)) GOTOERROR;
 				if (printpath(db,msgout)) GOTOERROR;
 				if (0>fputs(dirname,msgout)) GOTOERROR;
@@ -590,6 +643,7 @@ while (1) {
 	if (b->options.isonefilesystem) { // skip dirs and files that are on other devices, possibly from symlinks
 		if (b->rootdir.xdev!=statbuf.st_dev) {
 			if (isverbose) {
+				(void)unprintprogress(b);
 				if (S_ISREG(statbuf.st_mode)) {
 					if (0>fputs("skipping xdev file: ",msgout)) GOTOERROR;
 				} else if (S_ISDIR(statbuf.st_mode)) {
@@ -607,6 +661,7 @@ while (1) {
 	if (S_ISREG(statbuf.st_mode)) {
 		if (statbuf.st_mtim.tv_sec>=b->options.ceiling_mtime) {
 			if (isverbose) {
+				(void)unprintprogress(b);
 				if (0>fputs("skipping recently changed: ",msgout)) GOTOERROR;
 				if (printpath(db,msgout)) GOTOERROR;
 				if (0>fputs(de->d_name,msgout)) GOTOERROR;
@@ -615,26 +670,31 @@ while (1) {
 			continue; // ignore files that are too new
 		}
 		file=filename_find2_filebyname(db->files.topnode,de->d_name);
-		if (!file && b->options.isnothingnew) { // want to skip before md5
+		if (isnothingnew && !file) { // want to skip before md5
 			if (isverbose) {
+				(void)unprintprogress(b);
 				if (0>fputs("skipping new file: ",msgout)) GOTOERROR;
 				if (printpath(db,msgout)) GOTOERROR;
 				if (0>fputs(de->d_name,msgout)) GOTOERROR;
 				if (0>fputc('\n',msgout)) GOTOERROR;
+			}
+			if (b->options.isprogress) {
+				(void)printprogress(b,0,de->d_name);
 			}
 			continue;
 		}
 		{
 			int isnofile;
 			if (b->options.isprogress) {
-				(void)printprogress(de->d_name);
+				(void)printprogress(b,1,de->d_name);
 				if (getmd5(&isnofile,b,md5,dirfd(dir),de->d_name,&statbuf)) GOTOERROR;
-				(void)unprintprogress(de->d_name);
 			} else {
 				if (getmd5(&isnofile,b,md5,dirfd(dir),de->d_name,&statbuf)) GOTOERROR;
 			}
+			b->stats.bytesprocessed+=statbuf.st_size;
 			if (isnofile) {
 				if (isverbose) {
+					(void)unprintprogress(b);
 					if (0>fputs("Unable to read: ",msgout)) GOTOERROR;
 					if (printpath(db,msgout)) GOTOERROR;
 					if (0>fputs(de->d_name,msgout)) GOTOERROR;
@@ -651,12 +711,14 @@ while (1) {
 				if (statbuf.st_mtim.tv_sec>=b->sumfile.mtime) { // if the mtime is updated, the file changing is not odd
 					issave=1;
 					if (isverbose) {
+						(void)unprintprogress(b);
 						if (0>fputs("file changed: ",msgout)) GOTOERROR;
 						if (printpath(db,msgout)) GOTOERROR;
 						if (0>fputs(de->d_name,msgout)) GOTOERROR;
 						if (0>fputc('\n',msgout)) GOTOERROR;
 					}
 				} else { // don't want to auto-update the md5 in case there was corruption
+					(void)unprintprogress(b);
 					if (b->options.issavechanges) {
 						issave=1; 
 						if (0>fputs("Updating new MD5: ",msgout)) GOTOERROR;
@@ -676,6 +738,7 @@ while (1) {
 			} else {
 				file->flags|=ISMATCHED_FLAG_BITROT;
 				if (isverbose) {
+					(void)unprintprogress(b);
 					if (0>fputs("matched: ",msgout)) GOTOERROR;
 					if (printpath(db,msgout)) GOTOERROR;
 					if (0>fputs(de->d_name,msgout)) GOTOERROR;
@@ -691,6 +754,7 @@ while (1) {
 			(void)addnode2_filebyname(&db->files.topnode,file);
 			b->stats.changecount+=1;
 			if (isverbose) {
+				(void)unprintprogress(b);
 				if (0>fputs("new file: ",msgout)) GOTOERROR;
 				if (printpath(db,msgout)) GOTOERROR;
 				if (0>fputs(de->d_name,msgout)) GOTOERROR;
@@ -700,15 +764,35 @@ while (1) {
 	// if S_ISREG
 	} else if (S_ISDIR(statbuf.st_mode)) {
 		struct dir_bitrot *ndb;
-		if (findoradd_dir(&ndb,b,db,de->d_name,ISFOUND_FLAG_BITROT)) GOTOERROR;
-		if (scandirB(b,ndb,dir,de->d_name)) GOTOERROR;
+		if (isnothingnew) {
+			ndb=filename_find2_dirbyname(db->children.topnode,de->d_name);
+			if (ndb) {
+				ndb->flags|=ISFOUND_FLAG_BITROT;
+				if (scandirB(b,ndb,dir,de->d_name)) GOTOERROR;
+			} else {
+				if (isverbose) {
+					(void)unprintprogress(b);
+					if (0>fputs("skipping new directory: ",msgout)) GOTOERROR;
+					if (printpath(db,msgout)) GOTOERROR;
+					if (0>fputs(de->d_name,msgout)) GOTOERROR;
+					if (0>fputc('\n',msgout)) GOTOERROR;
+				}
+			}
+		} else {
+			if (findoradd_dir(&ndb,b,db,de->d_name,ISFOUND_FLAG_BITROT)) GOTOERROR;
+			if (scandirB(b,ndb,dir,de->d_name)) GOTOERROR;
+		}
 	// if S_ISDIR
 	} else { // special file
 		if (isverbose) {
+			(void)unprintprogress(b);
 			if (0>fputs("ignoring special: ",msgout)) GOTOERROR;
 			if (printpath(db,msgout)) GOTOERROR;
 			if (0>fputs(de->d_name,msgout)) GOTOERROR;
 			if (0>fputc('\n',msgout)) GOTOERROR;
+		}
+		if (b->options.isprogress) {
+			(void)printprogress(b,0,de->d_name);
 		}
 	}
 }
@@ -871,8 +955,70 @@ if (tb->header.parsed.mtime>b->options.ceiling_mtime) return 1;
 return 0;
 }
 
+static int unsafe_isexistingfile(struct bitrot *b, char *filename) {
+// unsafe_: this will edit filename but change it back
+struct dir_bitrot *dir;
+struct file_bitrot *file;
+
+dir=&b->topdir;
+while (1) {
+	char *slash;
+	slash=strchr(filename,'/');
+	if (!slash) break;
+	*slash=0;
+	if (!strcmp(filename,".")) {
+	} else {
+		dir=filename_find2_dirbyname(dir->children.topnode,filename);
+		if (!dir) {
+			*slash='/';
+			return 0;
+		}
+	}
+	*slash='/';
+	filename=slash+1;
+}
+file=filename_find2_filebyname(dir->files.topnode,filename);
+if (file) return 1;
+return 0;
+}
+
+static inline void getfullpath_tarvars(char *dest, struct tarvars_bitrot *tb) {
+// dest should be 257 chars
+unsigned int namelen=100,prefixlen=155;
+unsigned char *name,*prefix;
+name=tb->header.fields.f_name;
+prefix=tb->header.fields.f_prefix;
+if (*prefix) {
+	while (1) {
+		*dest=*prefix;
+		dest++;
+		prefixlen--;
+		if (!prefixlen) break;
+		prefix++;
+		if (!*prefix) break;
+	}
+	*dest='/';
+	dest++;
+}
+
+while (1) {
+	if (!*name) break;
+	*dest=*name;
+	dest++;
+	namelen--;
+	if (!namelen) break;
+	name++;
+}
+*dest=0;
+}
+
+
 static int consider_scantar(struct bitrot *b, struct tarvars_bitrot *tb, unsigned char *bytes, unsigned int len) {
 uint64_t size;
+int isworthy=0;
+FILE *msgout;
+
+msgout=b->options.msgout;
 
 #if 0
 fprintf(stderr,"%s:%d",__FILE__,__LINE__);
@@ -886,8 +1032,35 @@ fprintf(stderr," typeflag: %u",*tb->header.fields.f_typeflag);
 fputs("\n",stderr);
 #endif
 
-size=tb->header.parsed.size;
 if (isregular_scantar(tb) && !isignored_scantar(b,tb)) {
+	isworthy=1;
+	if (tb->header.parsed.filetype==LONGLINK_FILETYPE_TARVARS_BITROT) {
+// LONGLINK is already stored in tb->filename
+	} else {
+#if MAX_FILENAME_TARVARS_BITROT	< 256
+#error
+#endif
+		(void)getfullpath_tarvars(tb->filename,tb);
+	} 
+	if (b->options.isnothingnew && !unsafe_isexistingfile(b,tb->filename)) {
+		isworthy=0;
+		if (b->options.isverbose) {
+			(void)unprintprogress(b);
+			if (0>fputs("skipping new file: ",msgout)) GOTOERROR;
+			if (0>fputs(tb->filename,msgout)) GOTOERROR;
+			if (0>fputc('\n',msgout)) GOTOERROR;
+		}
+	}
+} else if (b->options.isprogress) {
+	// want full path for progress printing
+	if (tb->header.parsed.filetype==LONGLINK_FILETYPE_TARVARS_BITROT) {
+	} else {
+		(void)getfullpath_tarvars(tb->filename,tb);
+	} 
+}
+
+size=tb->header.parsed.size;
+if (isworthy) {
 	if (tb->header.parsed.filetype==LONGLINK_FILETYPE_TARVARS_BITROT) tb->header.parsed.filetype=LONGFILE_FILETYPE_TARVARS_BITROT;
 	else tb->header.parsed.filetype=REGULAR_FILETYPE_TARVARS_BITROT;
 	if (!size) {
@@ -909,7 +1082,7 @@ if (isregular_scantar(tb) && !isignored_scantar(b,tb)) {
 		(void)clear_context_md5(&tb->checksum.ctx);
 #endif
 		if (b->options.isprogress) {
-			(void)printprogress((char *)tb->header.fields.f_name); // limits to 60
+			(void)printprogress(b,1,tb->filename);
 		}
 	}
 } else if (islonglink_scantar(tb)) {
@@ -933,6 +1106,9 @@ if (isregular_scantar(tb) && !isignored_scantar(b,tb)) {
 	tb->filename[size]='\0';
 } else {
 	tb->header.parsed.filetype=NONE_FILETYPE_TARVARS_BITROT; // need to clear a previous LongLink record
+	if (b->options.isprogress) {
+		(void)printprogress(b,0,tb->filename);
+	}
 	if (!size) {
 		tb->state=HEADER_STATE_TARVARS_BITROT;
 		tb->header.bytesleft=512;
@@ -985,6 +1161,7 @@ return 0;
 }
 
 static void endslurp_scantar(struct bitrot *b, struct tarvars_bitrot *tb, unsigned char *bytes, unsigned int len) {
+b->stats.bytesprocessed+=tb->header.parsed.size; // might as well count skipped bytes too
 tb->state=HEADER_STATE_TARVARS_BITROT;
 tb->header.bytesleft=512;
 }
@@ -1043,36 +1220,6 @@ if (dbl) {
 return 0;
 }
 
-static inline void getfullpath_tarvars(char *dest, struct tarvars_bitrot *tb) {
-// dest should be 257 chars
-unsigned int namelen=100,prefixlen=155;
-unsigned char *name,*prefix;
-name=tb->header.fields.f_name;
-prefix=tb->header.fields.f_prefix;
-if (*prefix) {
-	while (1) {
-		*dest=*prefix;
-		dest++;
-		prefixlen--;
-		if (!prefixlen) break;
-		prefix++;
-		if (!*prefix) break;
-	}
-	*dest='/';
-	dest++;
-}
-
-while (1) {
-	if (!*name) break;
-	*dest=*name;
-	dest++;
-	namelen--;
-	if (!namelen) break;
-	name++;
-}
-*dest=0;
-}
-
 static int endfile_scantar(struct bitrot *b, struct tarvars_bitrot *tb, unsigned char *bytes, unsigned int len) {
 char *fullpath;
 struct file_bitrot *file;
@@ -1086,17 +1233,7 @@ fullpath=tb->filename;
 tb->state=HEADER_STATE_TARVARS_BITROT;
 tb->header.bytesleft=512;
 
-if (tb->header.parsed.filetype==REGULAR_FILETYPE_TARVARS_BITROT) {
-#if MAX_FILENAME_TARVARS_BITROT	< 256
-#error
-#endif
-		(void)getfullpath_tarvars(fullpath,tb);
-}
-// nothing to do for LONGFILE_FILETYPE_TARVARS_BITROT, name is already in fullpath
-
-if (b->options.isprogress) {
-	(void)unprintprogress((char *)tb->header.fields.f_name); // limits to 60
-}
+b->stats.bytesprocessed+=tb->header.parsed.size;
 
 #if 0
 fprintf(stderr,"%s:%d",__FILE__,__LINE__);
@@ -1132,11 +1269,13 @@ if (file) {
 		if (tb->header.parsed.mtime >=b->sumfile.mtime) { // if the mtime is updated, the file changing is not odd
 			issave=1;
 			if (b->options.isverbose) {
+				(void)unprintprogress(b);
 				if (0>fputs("file changed: ",msgout)) GOTOERROR;
 				if (0>fputs(fullpath,msgout)) GOTOERROR;
 				if (0>fputc('\n',msgout)) GOTOERROR;
 			}
 		} else { // don't want to auto-update the md5 in case there was corruption
+			(void)unprintprogress(b);
 			if (b->options.issavechanges) {
 				issave=1; 
 				if (0>fputs("Updating new MD5: ",msgout)) GOTOERROR;
@@ -1155,31 +1294,25 @@ if (file) {
 	} else {
 		file->flags|=ISMATCHED_FLAG_BITROT;
 		if (b->options.isverbose) {
+			(void)unprintprogress(b);
 			if (0>fputs("matched: ",msgout)) GOTOERROR;
 			if (0>fputs(fullpath,msgout)) GOTOERROR;
 			if (0>fputc('\n',msgout)) GOTOERROR;
 		}
 	}
 } else {
-	if (b->options.isnothingnew) {
-		if (b->options.isverbose) {
-			if (0>fputs("skipping new file: ",msgout)) GOTOERROR;
-			if (0>fputs(fullpath,msgout)) GOTOERROR;
-			if (0>fputc('\n',msgout)) GOTOERROR;
-		}
-	} else {
-		if (!(file=ALLOC_blockmem(&b->blockmem,struct file_bitrot))) GOTOERROR;
-		clear_file_bitrot(file);
-		if (!(file->name=strdup_blockmem(&b->blockmem,filename))) GOTOERROR;
-		file->flags=ISFOUND_FLAG_BITROT;
-		memcpy(file->md5,tb->checksum.md5,LEN_MD5_BITROT);
-		(void)addnode2_filebyname(&dir->files.topnode,file);
-		b->stats.changecount+=1;
-		if (b->options.isverbose) {
-			if (0>fputs("new file: ",msgout)) GOTOERROR;
-			if (0>fputs(fullpath,msgout)) GOTOERROR;
-			if (0>fputc('\n',msgout)) GOTOERROR;
-		}
+	if (!(file=ALLOC_blockmem(&b->blockmem,struct file_bitrot))) GOTOERROR;
+	clear_file_bitrot(file);
+	if (!(file->name=strdup_blockmem(&b->blockmem,filename))) GOTOERROR;
+	file->flags=ISFOUND_FLAG_BITROT;
+	memcpy(file->md5,tb->checksum.md5,LEN_MD5_BITROT);
+	(void)addnode2_filebyname(&dir->files.topnode,file);
+	b->stats.changecount+=1;
+	if (b->options.isverbose) {
+		(void)unprintprogress(b);
+		if (0>fputs("new file: ",msgout)) GOTOERROR;
+		if (0>fputs(fullpath,msgout)) GOTOERROR;
+		if (0>fputc('\n',msgout)) GOTOERROR;
 	}
 }
 
@@ -1193,6 +1326,7 @@ static int skipping_scantar(unsigned int *consumed_out,
 uint64_t ibl;
 ibl=tb->checksum.inputbytesleft;
 if (ibl<=len) {
+	b->stats.bytesprocessed+=tb->header.parsed.size; // might as well count skipped bytes too
 	tb->state=HEADER_STATE_TARVARS_BITROT;
 	tb->header.bytesleft=512;
 	*consumed_out=ibl;
