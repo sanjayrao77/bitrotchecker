@@ -64,11 +64,7 @@ struct bitrot {
 	struct {
 		unsigned int ptrmax;
 		unsigned char *ptr;
-#ifdef USEMMAP
-	} _iobuffer;
-#else
 	} iobuffer;
-#endif
 	struct {
 		unsigned int changecount;
 		uint64_t bytesprocessed;
@@ -97,7 +93,7 @@ struct bitrot {
 };
 H_CLEARFUNC(bitrot);
 
-int init_bitrot(struct bitrot *bitrot, int isnoio);
+int init_bitrot(struct bitrot *bitrot);
 void deinit_bitrot(struct bitrot *bitrot);
 void unprintprogress_bitrot(struct bitrot *b);
 int loadfile_bitrot(int *isnotfound_out, struct bitrot *bitrot, char *sumfile);

@@ -41,7 +41,9 @@
 #define DEBUG
 #include "common/conventions.h"
 #include "common/blockmem.h"
+#ifdef USEMMAP
 #include "common/mmapwrapper.h"
+#endif
 
 #include "bitrot.h"
 #include "tarvars.h"
@@ -51,31 +53,25 @@
 SCLEARFUNC(file_bitrot);
 SCLEARFUNC(dir_bitrot);
 
+static unsigned char zeromd5[16]={0xd4,0x1d,0x8c,0xd9,0x8f,0x00,0xb2,0x04,0xe9,0x80,0x09,0x98,0xec,0xf8,0x42,0x7e};
+
 void clear_bitrot(struct bitrot *bitrot) {
 static struct bitrot blank={.rootdir.xdev=INVALID_DEVT_BITROT,.options.ceiling_mtime=-1};
 *bitrot=blank;
 }
 
-int init_bitrot(struct bitrot *bitrot, int isnoio) {
+int init_bitrot(struct bitrot *bitrot) {
 if (init_blockmem(&bitrot->blockmem,0)) GOTOERROR;
 bitrot->topdir.name="";
-#ifndef USEMMAP
-bitrot->iobuffer.ptrmax=READCHUNK_BITROT;
-if (!isnoio) {
-	if (!(bitrot->iobuffer.ptr=malloc(bitrot->iobuffer.ptrmax))) GOTOERROR;
-}
-#endif
+bitrot->iobuffer.ptrmax=READCHUNK_BITROT; // we need a fallback in case filesystem doesn't support mmap
+if (!(bitrot->iobuffer.ptr=malloc(bitrot->iobuffer.ptrmax))) GOTOERROR;
 return 0;
 error:
 	return -1;
 }
 
 void deinit_bitrot(struct bitrot *bitrot) {
-#ifdef USEMMAP
-iffree(bitrot->_iobuffer.ptr);
-#else
 iffree(bitrot->iobuffer.ptr);
-#endif
 deinit_blockmem(&bitrot->blockmem);
 }
 
@@ -426,39 +422,40 @@ unprintprogress(b);
 }
 
 #ifdef USEMMAP
-static int getmd5(int *isnofile_out, struct bitrot *b, unsigned char *dest, int dfd, char *name, struct stat *statbuf) {
-MD5_CTX ctx;
+#ifdef OPENSSL
+static int getmd5_mmap(int *isnommap_out, MD5_CTX *ctx, int fd, uint64_t st_size, unsigned int readusleep) {
+#else
+static void getmd5_mmap(int *isnommap_out, MD5_CTX *ctx, int fd, uint64_t st_size, unsigned int readusleep) {
+#endif
 unsigned char *ptr;
-unsigned int readusleep;
 struct mmapwrapper mw;
 uint64_t left;
-int fd=-1;
 
 clear_mmapwrapper(&mw);
 
-readusleep=b->options.readusleep;
-
-fd=openat(dfd,name,O_RDONLY);
-if (0>fd) {
-	if ((errno==EACCES) || (errno==EPERM)) {
-		*isnofile_out=1;
-		return 0;
-	}
-	fprintf(stderr,"%s:%d error opening %s, (%s)\n",__FILE__,__LINE__,name,strerror(errno));
-	GOTOERROR;
-}
-
+#if UINTPTR_MAX == 0xffffffff
+#warning compiling for 32bit pointers
+if (st_size>0xff000000) { // on 32bit machines, we fall back on read() for files that don't fit
+// TODO manage 32bit allocations of mmap
+	*isnommap_out=1;
 #ifdef OPENSSL
-if (1!=MD5_Init(&ctx)) GOTOERROR; // probably can't happen
-#elif GNUTLS
-(void)MD5_Init(&ctx);
+	return 0;
 #else
-(void)clear_context_md5(&ctx);
+	return;
+#endif
+}
 #endif
 
-if (statbuf->st_size) {
-	if (initreadfd2_mmapwrapper(&mw,fd,statbuf->st_size)) GOTOERROR;
+if (initreadfd2_mmapwrapper(&mw,fd,st_size)) { // can only fail by mmap
+	*isnommap_out=1;
+#ifdef OPENSSL
+	return 0;
+#else
+	return;
+#endif
+}
 
+{
 	ptr=mw.addr;
 	left=mw.filesize;
 
@@ -466,11 +463,11 @@ if (statbuf->st_size) {
 		if (!left) break;
 		if (left>READCHUNK_BITROT) {
 #ifdef OPENSSL
-			if (1!=MD5_Update(&ctx,ptr,READCHUNK_BITROT)) GOTOERROR;
+			if (1!=MD5_Update(ctx,ptr,READCHUNK_BITROT)) GOTOERROR;
 #elif GNUTLS
-			(void)MD5_Update(&ctx,ptr,READCHUNK_BITROT);
+			(void)MD5_Update(ctx,ptr,READCHUNK_BITROT);
 #else
-			(void)addbytes_context_md5(&ctx,ptr,READCHUNK_BITROT);
+			(void)addbytes_context_md5(ctx,ptr,READCHUNK_BITROT);
 #endif
 			ptr+=READCHUNK_BITROT;
 			left-=READCHUNK_BITROT;
@@ -478,11 +475,11 @@ if (statbuf->st_size) {
 			int k;
 			k=left;
 #ifdef OPENSSL
-			if (1!=MD5_Update(&ctx,ptr,k)) GOTOERROR;
+			if (1!=MD5_Update(ctx,ptr,k)) GOTOERROR;
 #elif GNUTLS
-			(void)MD5_Update(&ctx,ptr,k);
+			(void)MD5_Update(ctx,ptr,k);
 #else
-			(void)addbytes_context_md5(&ctx,ptr,k);
+			(void)addbytes_context_md5(ctx,ptr,k);
 #endif
 			break;
 		}
@@ -490,90 +487,98 @@ if (statbuf->st_size) {
 	}
 }
 
-#ifdef OPENSSL
-if (1!=MD5_Final(dest,&ctx)) GOTOERROR;
-#elif GNUTLS
-(void)MD5_Final(dest,&ctx);
-#else
-(void)finish_context_md5(dest,&ctx);
-#endif
-
-*isnofile_out=0;
-
+*isnommap_out=0;
 deinit_mmapwrapper(&mw);
-(ignore)close(fd);
+#ifdef OPENSSL
 return 0;
 error:
 	deinit_mmapwrapper(&mw);
-	ifclose(fd);
 	return -1;
-}
 #endif
-#ifndef USEMMAP
+}
+// end USEMMAP
+#endif
+
 static int getmd5(int *isnofile_out, struct bitrot *b, unsigned char *dest, int dfd, char *name, struct stat *statbuf) {
 MD5_CTX ctx;
 unsigned char *ptr;
 unsigned int ptrmax;
 unsigned int readusleep;
+uint64_t st_size;
 int fd=-1;
 
-readusleep=b->options.readusleep;
 
-fd=openat(dfd,name,O_RDONLY);
-if (0>fd) {
-	if ((errno==EACCES) || (errno==EPERM)) {
-		*isnofile_out=1;
-		return 0;
-	}
-	fprintf(stderr,"%s:%d error opening %s, (%s)\n",__FILE__,__LINE__,name,strerror(errno));
-	GOTOERROR;
-}
-
+st_size=statbuf->st_size;
+if (!st_size) {
+	memcpy(dest,zeromd5,16);
+} else {
+	int isnommap;
 #ifdef OPENSSL
-if (1!=MD5_Init(&ctx)) GOTOERROR; // probably can't happen
+	if (1!=MD5_Init(&ctx)) GOTOERROR; // probably can't happen
 #elif GNUTLS
-(void)MD5_Init(&ctx);
+	(void)MD5_Init(&ctx);
 #else
-(void)clear_context_md5(&ctx);
+	(void)clear_context_md5(&ctx);
 #endif
+	readusleep=b->options.readusleep;
 
-ptr=b->iobuffer.ptr;
-ptrmax=b->iobuffer.ptrmax;
-
-while (1) {
-	int k;
-	k=read(fd,ptr,ptrmax);
-	if (k<=0) {
-		if (!k) break;
+	fd=openat(dfd,name,O_RDONLY);
+	if (0>fd) {
+		if ((errno==EACCES) || (errno==EPERM)) {
+			*isnofile_out=1;
+			return 0;
+		}
+		fprintf(stderr,"%s:%d error opening %s, (%s)\n",__FILE__,__LINE__,name,strerror(errno));
 		GOTOERROR;
 	}
+
+#ifdef USEMMAP
 #ifdef OPENSSL
-	if (1!=MD5_Update(&ctx,ptr,k)) GOTOERROR;
-#elif GNUTLS
-	(void)MD5_Update(&ctx,ptr,k);
+	if (getmd5_mmap(&isnommap,&ctx,fd,st_size,readusleep)) GOTOERROR;
 #else
-	(void)addbytes_context_md5(&ctx,ptr,k);
+	(void)getmd5_mmap(&isnommap,&ctx,fd,st_size,readusleep);
 #endif
-	if (readusleep) usleep(readusleep);
+#else
+	isnommap=1;
+#endif
+	if (isnommap) {
+		ptr=b->iobuffer.ptr;
+		ptrmax=b->iobuffer.ptrmax;
+
+		while (1) {
+			int k;
+			k=read(fd,ptr,ptrmax);
+			if (k<=0) {
+				if (!k) break;
+				GOTOERROR;
+			}
+#ifdef OPENSSL
+			if (1!=MD5_Update(&ctx,ptr,k)) GOTOERROR;
+#elif GNUTLS
+			(void)MD5_Update(&ctx,ptr,k);
+#else
+			(void)addbytes_context_md5(&ctx,ptr,k);
+#endif
+			if (readusleep) usleep(readusleep);
+		}
+	}
+
+#ifdef OPENSSL
+	if (1!=MD5_Final(dest,&ctx)) GOTOERROR;
+#elif GNUTLS
+	(void)MD5_Final(dest,&ctx);
+#else
+	(void)finish_context_md5(dest,&ctx);
+#endif
+	(ignore)close(fd);
 }
 
-#ifdef OPENSSL
-if (1!=MD5_Final(dest,&ctx)) GOTOERROR;
-#elif GNUTLS
-(void)MD5_Final(dest,&ctx);
-#else
-(void)finish_context_md5(dest,&ctx);
-#endif
-
 *isnofile_out=0;
-
-(ignore)close(fd);
 return 0;
 error:
 	ifclose(fd);
 	return -1;
 }
-#endif
 
 static int scandirB(struct bitrot *b, struct dir_bitrot *db, DIR *parentdir, char *dirname) {
 DIR *dir=NULL;
@@ -1079,7 +1084,6 @@ if (isworthy) {
 #if LEN_MD5_BITROT != 16
 #error
 #endif
-		static unsigned char zeromd5[16]={0xd4,0x1d,0x8c,0xd9,0x8f,0x00,0xb2,0x04,0xe9,0x80,0x09,0x98,0xec,0xf8,0x42,0x7e};
 		tb->state=ENDFILE_STATE_TARVARS_BITROT;
 		memcpy(tb->checksum.md5,zeromd5,16);
 	} else {

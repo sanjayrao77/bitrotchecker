@@ -196,7 +196,7 @@ if (!sumfile) {
 	return 0;
 }
 
-if (init_bitrot(&bitrot,istar)) GOTOERROR;
+if (init_bitrot(&bitrot)) GOTOERROR;
 
 {
 	int isnotfound;
