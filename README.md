@@ -20,6 +20,7 @@ Advantages:
 3. can be run during tar backups, piggybacking on the same disk reads
 4. has throttling support to limit io impact
 5. checksum files are compatible with standard md5sum tools
+6. can be used on existing filesystems
 
 Disadvantages:
 1. can't track data corruption in real-time
@@ -32,11 +33,16 @@ file.
 
 ## Building
 
-Currently, only linux is supported. No extra libraries are required. You should
-be able to download the files and run "make".
+Currently, only linux and OSX are supported. No extra libraries are required.
 
-For non-linux systems, you can remove -DUSEMMAP to use read() instead. It should be
-easy to port to other unix systems.
+On linux systems, you should be able to just download the
+files and run "make".
+
+On modern OSX systems, you should be able to download the files and run "make -f Makefile.osx".
+I've only tested this on an M1 and haven't done extensive testing.
+
+For other systems, you can remove -DUSEMMAP to use read() instead. It should be
+easy to port to other unix-like systems.
 
 The standard Makefile compiles a native implementation of md5. It's probably not
 the fastest. You can use Makefile.gnutls and Makefile.openssl to use GNU-TLS and

@@ -10,6 +10,9 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #define DEBUG
+#ifdef OSX
+#include "osx.h"
+#endif
 #include "conventions.h"
 
 #include "mmapwrapper.h"
@@ -80,7 +83,7 @@ if (filesize) {
 	if (addr==MAP_FAILED) {
 		GOTOERROR;
 	}
-} else if (!filesize) {
+} else { // if (!filesize) {
 	int pagesize;
 	// can't map 0 size
 	pagesize=sysconf(_SC_PAGESIZE);

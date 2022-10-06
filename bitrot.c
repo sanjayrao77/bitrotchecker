@@ -201,7 +201,11 @@ if (!(ff=fopen(sumfile,"r"))) GOTOERROR;
 {
 	struct stat statbuf;
 	if (fstat(fileno(ff),&statbuf)) GOTOERROR;
+#ifdef LINUX
 	bitrot->sumfile.mtime=statbuf.st_mtim.tv_sec;
+#elif OSX
+	bitrot->sumfile.mtime=statbuf.st_mtimespec.tv_sec;
+#endif 
 }
 if (!(oneline=malloc(MAXLINELEN))) GOTOERROR;
 while (1) {
@@ -659,7 +663,11 @@ while (1) {
 		}
 	}
 	if (S_ISREG(statbuf.st_mode)) {
+#ifdef LINUX
 		if (statbuf.st_mtim.tv_sec>=b->options.ceiling_mtime) {
+#elif OSX
+		if (statbuf.st_mtimespec.tv_sec>=b->options.ceiling_mtime) {
+#endif
 			if (isverbose) {
 				(void)unprintprogress(b);
 				if (0>fputs("skipping recently changed: ",msgout)) GOTOERROR;
@@ -708,7 +716,11 @@ while (1) {
 			if (memcmp(md5,file->md5,LEN_MD5_BITROT)) {
 				int issave=0;
 				file->flags|=ISMISMATCH_FLAG_BITROT;
+#ifdef LINUX
 				if (statbuf.st_mtim.tv_sec>=b->sumfile.mtime) { // if the mtime is updated, the file changing is not odd
+#elif OSX
+				if (statbuf.st_mtimespec.tv_sec>=b->sumfile.mtime) { // if the mtime is updated, the file changing is not odd
+#endif
 					issave=1;
 					if (isverbose) {
 						(void)unprintprogress(b);

@@ -37,6 +37,9 @@
 #include "common/md5.h"
 #endif
 #define DEBUG
+#ifdef OSX
+#include "common/osx.h"
+#endif
 #include "common/conventions.h"
 #include "common/blockmem.h"
 
@@ -100,6 +103,10 @@ int istar=0,istarstdout=0;
 --nothingnew : don't add new files from scan
 */
 
+
+#ifdef OSX
+if (sizeof(off64_t)!=8) GOTOERROR;
+#endif
 
 clear_bitrot(&bitrot);
 clear_tarvars_bitrot(&tarvars);
